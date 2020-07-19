@@ -61,16 +61,48 @@ def windowed_dataset(series, window_size, batch_size, shuffle_buffer):
     return dataset
 
 dataset = windowed_dataset(x_train, window_size, batch_size, shuffle_buffer_size)
-print(dataset)
 
-l0 = tf.keras.layers.Dense(1, input_shape=[window_size])
-model = tf.keras.models.Sequential([l0])
+model = tf.keras.models.Sequential([
+    tf.keras.layers.Dense(10, input_shape=[window_size], activation="relu"),
+    tf.keras.layers.Dense(10, activation="relu"),
+    tf.keras.layers.Dense(1)
+])
+
+lr_schedule = tf.keras.callbacks.LearningRateScheduler(
+    lambda epoch: 1e-8 * 10 ** (epoch / 20))
 
 model.compile(loss="mse",
               optimizer=tf.keras.optimizers.SGD(lr=1e-6, momentum=0.9))
-model.fit(dataset, epochs=100, verbose=0)
+history = model.fit(dataset, epochs=100, verbose=0, callbacks=[lr_schedule])
 
-print(f"Layer weights {l0.get_weights()}")
+lrs = 1e-8 * (10 ** (np.arange(100) / 20))
+plt.semilogx(lrs, history.history["loss"])
+plt.axis([1e-8, 1e-3, 0, 300])
+
+
+window_size = 30
+dataset = windowed_dataset(x_train, window_size, batch_size, shuffle_buffer_size)
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(10, activation="relu", input_shape=[window_size]),
+    tf.keras.layers.Dense(10, activation="relu"),
+    tf.keras.layers.Dense(1)
+])
+
+model.compile(loss="mse", optimizer=tf.keras.optimizers.SGD(lr=8e-6, momentum=0.9))
+history = model.fit(dataset, epochs=500, verbose=0)
+
+loss = history.history["loss"]
+epochs = range(len(loss))
+plt.plot(epochs, loss, 'b', label="Training Loss")
+plt.show()
+
+loss = history.history['loss']
+epochs = range(10, len(loss))
+plot_loss = loss[10:]
+print(plot_loss)
+plt.plot(epochs, plot_loss, 'b', label='Training Loss')
+plt.show()
 
 forecast = []
 
