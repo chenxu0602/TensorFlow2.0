@@ -75,3 +75,81 @@ print(f"label                     : {label}")
 print(f"target    :", target)
 print(f"context   :", context)
 print(f"label     :", label)
+
+
+sampling_table = tf.keras.preprocessing.sequence.make_sampling_table(size=10)
+
+
+def generate_training_data(sequences, window_size, num_ns, vocab_size, seed):
+    targets, contexts, labels = [], [], []
+    sampling_table = tf.keras.preprocessing.sequence.make_sampling_table(vocab_size)
+
+    for sequence in tqdm.tqdm(sequences):
+        positive_skip_grams, _, tf.keras.preprocessing.sequence.skipgrams(
+            sequences,
+            vocabulary_size=vocab_size,
+            sampling_table=sampling_table,
+            window_size=window_size,
+            negative_samples=0)
+
+    for target_word, context_word in positive_skip_grams:
+        context_class = tf.expand_dims(
+            tf.constant([context_word], dtype="int64"), 1)
+        negative_smapling_candidates, _, _ = tf.random.log_uniform_candidate_sampler(
+            true_classes=context_class,
+            num_true=1,
+            num_sampled=num_ns,
+            unique=True,
+            range_max=vocab_size,
+            seed=SEED,
+            name="negative_sampling")
+
+        negative_smapling_candidates = tf.expand_dims(
+            negative_smapling_candidates, 1)
+
+
+        context = tf.concat([context_class, negative_smapling_candidates], 0)
+        label = tf.constant([1] + [0] * num_ns, dtype="int64")
+
+        targets.append(target_word)
+        contexts.append(context)
+        labels.append(label)
+
+    return targets, contexts, labels
+
+
+path_to_file = tf.keras.utils.get_file("shakespeare.txt", "https://storage.googleapis.com/download.tensorflow.org/data/shakespeare.txt")
+
+with open(path_to_file) as f:
+    lines = f.read().splitlines()
+
+for line in lines[:20]:
+    print(line)
+
+text_ds = tf.data.TextLineDataset(path_to_file).filter(lambda x: tf.cast(tf.strings.length(x), bool))
+
+def custom_standardization(input_data):
+    lowercase = tf.strings.lower(input_data)
+    return tf.strings.regex_replace(lowercase,
+                                    "[%s]" % re.escape(string.punctuation), "")
+
+vocab_size = 4096
+sequence_length = 10
+
+vectorize_layer = tf.keras.layers.experimental.preprocessing.TextVectorization(
+    standardize=custom_standardization,
+    max_tokens=vocab_size,
+    output_mode="int",
+    output_sequence_length=sequence_length)
+
+vectorize_layer.adapt(text_ds.batch(1024))
+inverse_vocab = vectorize_layer.get_vocabulary()
+print(len(inverse_vocab))
+print(inverse_vocab[:20])
+
+def vectorize_text(text):
+    text = tf.expand_dims(text, -1)
+    return tf.squeeze(vectorize_layer(text))
+
+
+text_vector_ds = text_ds.batch(1024).prefetch(AUTOTUNE).map(vectorize_layer).unbatch()
