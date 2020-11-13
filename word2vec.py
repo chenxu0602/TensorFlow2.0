@@ -169,7 +169,7 @@ targets, contexts, labels = generate_training_data(
 print(len(targets), len(contexts), labels)
 
 
-BATCH_SIZE = 1024
+BATCH_SIZE = 4
 BUFFER_SIZE = 10000
 dataset = tf.data.Dataset.from_tensor_slices(((targets, contexts), labels))
 dataset = dataset.shuffle(BUFFER_SIZE).batch(BATCH_SIZE, drop_remainder=True)
@@ -177,3 +177,37 @@ print(dataset)
 
 dataset = dataset.cache().prefetch(buffer_size=AUTOTUNE)
 print(dataset)
+
+class Word2Vec(tf.keras.Model):
+    def __init__(self, vocab_size, embedding_dim):
+        super(Word2Vec, self).__init__()
+        self.target_embedding = tf.keras.layers.Embedding(vocab_size,
+                                                          embedding_dim,
+                                                          input_length=1,
+                                                          name="w2v_embedding",)
+        self.context_embedding = tf.keras.layers.Embedding(vocab_size,
+                                                           embedding_dim,
+                                                           input_length=num_ns+1)
+        self.dots = tf.keras.layers.Dot(axes=(3, 2))                                                        
+        self.flatten = tf.keras.layers.Flatten()
+
+    def call(self, pair):
+        target, context = pair
+        we = self.target_embedding(target)
+        ce = self.context_embedding(context)
+        dots = self.dots([ce, we])
+        return self.flatten(dots)
+
+def custom_loss(x_logit, y_true):
+    return tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=y_true)
+
+embedding_dim = 128
+word2vec = Word2Vec(vocab_size, embedding_dim)
+word2vec.compile(optimizer="adam",
+                 loss=tf.keras.losses.CategoricalCrossentropy(from_logits=True),
+                 metrics=["accuracy"])
+
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir="logs")
+
+word2vec.fit(dataset, epochs=20, callbacks=[tensorboard_callback])
+
