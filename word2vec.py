@@ -85,8 +85,8 @@ def generate_training_data(sequences, window_size, num_ns, vocab_size, seed):
     sampling_table = tf.keras.preprocessing.sequence.make_sampling_table(vocab_size)
 
     for sequence in tqdm.tqdm(sequences):
-        positive_skip_grams, _, tf.keras.preprocessing.sequence.skipgrams(
-            sequences,
+        positive_skip_grams, _ = tf.keras.preprocessing.sequence.skipgrams(
+            sequence,
             vocabulary_size=vocab_size,
             sampling_table=sampling_table,
             window_size=window_size,
@@ -151,5 +151,29 @@ def vectorize_text(text):
     text = tf.expand_dims(text, -1)
     return tf.squeeze(vectorize_layer(text))
 
-
 text_vector_ds = text_ds.batch(1024).prefetch(AUTOTUNE).map(vectorize_layer).unbatch()
+
+sequences = list(text_vector_ds.as_numpy_iterator())
+print(len(sequences))
+
+for seq in sequences[:5]:
+    print(f"{seq} => {[inverse_vocab[i] for i in seq]}")
+
+targets, contexts, labels = generate_training_data(
+    sequences=sequences,
+    window_size=2,
+    num_ns=4,
+    vocab_size=vocab_size,
+    seed=SEED)
+
+print(len(targets), len(contexts), labels)
+
+
+BATCH_SIZE = 1024
+BUFFER_SIZE = 10000
+dataset = tf.data.Dataset.from_tensor_slices(((targets, contexts), labels))
+dataset = dataset.shuffle(BUFFER_SIZE).batch(BATCH_SIZE, drop_remainder=True)
+print(dataset)
+
+dataset = dataset.cache().prefetch(buffer_size=AUTOTUNE)
+print(dataset)
