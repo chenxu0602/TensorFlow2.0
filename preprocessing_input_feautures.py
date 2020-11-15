@@ -1,67 +1,124 @@
 
+import os
+import tarfile
+import urllib
+
+DOWNLOAD_ROOT = "https://raw.githubusercontent.com/ageron/handson-ml2/master/"
+HOUSING_PATH = os.path.join("datasets", "housing")
+HOUSING_URL = DOWNLOAD_ROOT + "datasets/housing/housing.tgz"
+
+def fetch_housing_data(housing_url=HOUSING_URL, housing_path=HOUSING_PATH):
+    os.makedirs(housing_path, exist_ok=True)
+    tgz_path = os.path.join(housing_path, "housing.tgz")
+    urllib.request.urlretrieve(housing_url, tgz_path)
+    housing_tgz = tarfile.open(tgz_path)
+    housing_tgz.extractall(path=housing_path)
+    housing_tgz.close()
+
+fetch_housing_data()
+
+import pandas as pd
+
+def load_housing_data(housing_path=HOUSING_PATH):
+    csv_path = os.path.join(housing_path, "housing.csv")
+    return pd.read_csv(csv_path)
+
+housing = load_housing_data()
+
 import numpy as np
 import tensorflow as tf
 
-class Standardization(tf.keras.layers.Layer):
-    def adapt(self, data_sample):
-        self.means_ = np.mean(data_sample, axis=0, keepdims=True)
-        self.stds_ = np.std(data_sample, axis=0, keepdims=True)
+housing_median_age = tf.feature_column.numeric_column("housing_median_age")
 
-    def call(self, inputs):
-        return (inputs - self.means_) / (self.stds_ + tf.keras.backend.epsilon())
+age_mean, age_std = housing.housing_median_age.mean(), housing.housing_median_age.std()
+housing_median_age = tf.feature_column.numeric_column(
+    "housing_median_age", normalizer_fn=lambda x: (x - age_mean) / age_std)
 
-std_layer = Standardization()
-#std_layer.adapt(data_sample)
+median_income = tf.feature_column.numeric_column("median_income")
+bucketized_income = tf.feature_column.bucketized_column(
+    median_income, boundaries=[1.5, 3, 4.5, 6.])
 
-vocab = ["<1H OCEAN", "INLAND", "NEAR OCEAN", "NEAR BAY", "ISLAND"]
-indices = tf.range(len(vocab), dtype=tf.int64)
-table_init = tf.lookup.KeyValueTensorInitializer(vocab, indices)
+ocean_prox_vocab = ['<1H OCEAN', 'INLAND', 'ISLAND', 'NEAR BAY', 'NEAR OCEAN']
+ocean_proximity = tf.feature_column.categorical_column_with_vocabulary_list(
+    "ocean_proximity", ocean_prox_vocab)
 
-num_oov_buckets = 2
-table = tf.lookup.StaticVocabularyTable(table_init, num_oov_buckets)
+city_hash = tf.feature_column.categorical_column_with_hash_bucket(
+    "city", hash_bucket_size=1000)
 
-categories = tf.constant(["NEAR BAY", "DESERT", "INLAND", "INLAND"])
-cat_indices = table.lookup(categories)
-print(cat_indices)
-cat_one_hot = tf.one_hot(cat_indices, depth=len(vocab) + num_oov_buckets)
-print(cat_one_hot)
+bucketized_age = tf.feature_column.bucketized_column(
+    housing_median_age, boundaries=[-1., -0.5, 0., 0.5, 1.])
 
-embedding_dim = 2
-embed_init = tf.random.uniform([len(vocab) + num_oov_buckets, embedding_dim])
-embedding_matrix = tf.Variable(embed_init)
-print(embedding_matrix)
+age_and_ocean_proximity = tf.feature_column.crossed_column(
+    [bucketized_age, ocean_proximity], hash_bucket_size=100)
 
-print(tf.nn.embedding_lookup(embedding_matrix, cat_indices))
+latitude = tf.feature_column.numeric_column("latitude")
+longitude = tf.feature_column.numeric_column("longitude")
 
-embedding = tf.keras.layers.Embedding(input_dim=len(vocab) + num_oov_buckets,
-                                      output_dim=embedding_dim)
-print(embedding(cat_indices))
+bucketized_latitude = tf.feature_column.bucketized_column(
+    latitude, boundaries=list(np.linspace(32., 42., 20 - 1)))
+bucketized_longitude = tf.feature_column.bucketized_column(
+    longitude, boundaries=list(np.linspace(-125., -114., 20 - 1)))
+location = tf.feature_column.crossed_column(
+    [bucketized_latitude, bucketized_longitude], hash_bucket_size=1000)
 
-regular_inputs = tf.keras.layers.Input(shape=[8])
-categories = tf.keras.layers.Input(shape=[], dtype=tf.string)
-cat_indices = tf.keras.layers.Lambda(lambda cats: table.lookup(cats))(categories)
-cat_embed = tf.keras.layers.Embedding(input_dim=6, output_dim=2)(cat_indices)
-encoded_inputs = tf.keras.layers.concatenate([regular_inputs, cat_embed])
-outputs = tf.keras.layers.Dense(1)(encoded_inputs)
-model = tf.keras.models.Model(inputs=[regular_inputs, categories], outputs=[outputs])
+ocean_proximity_one_hot = tf.feature_column.indicator_column(ocean_proximity)
+ocean_proximity_embed = tf.feature_column.embedding_column(ocean_proximity, dimension=2)
+
+median_house_value = tf.feature_column.numeric_column("median_house_value")
+
+from sklearn.model_selection import train_test_split
+train, test = train_test_split(housing, test_size=0.2)
+train, valid = train_test_split(train, test_size=0.2)
+
+feature_columns = [
+    housing_median_age,
+#    bucketized_income,
+#    ocean_proximity_embed,
+#    bucketized_age,
+	ocean_proximity_one_hot
+]
+
+feature_description = tf.feature_column.make_parse_example_spec(feature_columns)
+
+feature_layer = tf.keras.layers.DenseFeatures(feature_columns)
+
+def df_to_dataset(dataframe, shuffle=True, batch_size=32):
+    dataframe = dataframe.copy()
+    labels = dataframe.pop("median_house_value")
+    ds = tf.data.Dataset.from_tensor_slices((dict(dataframe), labels))
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(dataframe))
+    ds = ds.batch(batch_size)
+    return ds
+
+batch_size = 32
+train_ds = df_to_dataset(train, batch_size=batch_size)
+valid_ds = df_to_dataset(valid, batch_size=batch_size)
+test_ds = df_to_dataset(test, batch_size=batch_size)
+
+model = tf.keras.Sequential([
+   feature_layer,
+   tf.keras.layers.Dense(1)
+])
+
+model.compile(loss="mse",
+              optimizer=tf.keras.optimizers.SGD(lr=1e-3),
+              metrics=["accuracy"])
+model.fit(train_ds, steps_per_epoch=len(train) // batch_size, epochs=5, validation_data=valid_ds)
 
 
-import tensorflow_transform as tft
+try:
+    import tensorflow_transform as tft
 
-def preprocess(inputs):
-    median_age = inputs["housing_median_age"]
-    ocean_proximity = inputs["ocean_proximity"]
-    standardized_age = tft.scale_to_z_score(median_age)
-    ocean_proximity_id = tft.compute_and_apply_vocabulary(ocean_proximity)
-    return {
-        "standardized_median_age": standardized_age,
-        "ocean_proximity_id": ocean_proximity_id
-    }
+    def preprocess(inputs):
+        median_age = inputs["housing_median_age"]
+        ocean_proximity = inputs["ocean_proximity"]
+        standardized_age = tft.scale_to_z_score(median_age - tft.mean(median_age))
+        ocean_proximity_id = tft.compute_and_apply_vocabulary(ocean_proximity)
+        return {
+            "standardized_median_age": standardized_age,
+            "ocean_proximity_id": ocean_proximity_id
+        }
+except ImportError:
+    print("TF Transform is not installed. Try running: pip3 install -U tensorflow-transform")
 
-import tensorflow_datasets as tfds
-
-dataset = tfds.load(name="mnist")
-mnist_train, mnist_test = dataset["train"], dataset["test"]
-mnist_train = mnist_train.shuffle(10000).batch(32).prefetch(1)
-mnist_train = mnist_train.map(lambda items: (items["image"], items["label"]))
-mnist_train.prefetch(1)
