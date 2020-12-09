@@ -70,7 +70,8 @@ input_tensor, target_tensor, inp_lang, targ_lang = load_dataset(path_to_file, nu
 
 max_length_targ, max_length_inp = target_tensor.shape[1], input_tensor.shape[1]
 
-input_tensor_train, input_tensor_val, target_tensor_train, target_tensor_val = train_test_split(input_tensor, target_tensor, test_size=0.2)
+input_tensor_train, input_tensor_val, target_tensor_train, target_tensor_val  \
+    = train_test_split(input_tensor, target_tensor, test_size=0.2)
 print(len(input_tensor_train), len(target_tensor_train), len(input_tensor_val), len(target_tensor_val))
 
 
